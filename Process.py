@@ -1,3 +1,4 @@
+import re
 import socket
 import threading
 import time
@@ -8,7 +9,7 @@ class BroadcasterProcess:
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.server_address = ('127.0.0.1', int(port))
         self.client_socket.bind(self.server_address)
-        self.client_socket.settimeout(2)
+        self.client_socket.settimeout(1)
         self.role = 'follower'
         self.leader = None
         self.neighbors = []
@@ -24,32 +25,52 @@ class BroadcasterProcess:
     def election(self):
         self.leader = None
         self.role = 'candidate'
-        msg = 'election'
+        msg = b'election'
         cantVotes = 0
         for neighbor in self.neighbors:
-            self.client_socket.sendto(msg.encode(), neighbor)
-            msg, addr = self.client_socket.recvfrom(1024)
-            if msg != 'accept':
-                cantVotes += 1
-            else:
-                break
+            self.client_socket.sendto(msg, neighbor)
+            try:
+                msg, addr = self.client_socket.recvfrom(1024)
+                if msg == b'accept':
+                    cantVotes += 1
+                else:
+                    break
+            except socket.timeout:
+                pass
+        print('election')
         if not self.neighbors or cantVotes == len(self.neighbors )-1:
             self.role = 'leader'
-            self.leader = self
+            self.leader = self.server_address
+            self.beat = threading.Thread(target=self.heartbeat)
+            self.beat.start()
+
             print(f'El proceso {self.server_address} se ha convertido en el nuevo líder')
 
     def whoIsLeader(self):
+        
         if not self.neighbors:
             self.role = 'leader'
-            self.leader = self
+            self.leader = self.server_address
+            print(f'I am the leader: {self.server_address}')
+            self.beat = threading.Thread(target=self.heartbeat)
+            self.beat.start()
+            self.heartControl.join()
         else:
+            print('who2')
             for neighbor in self.neighbors:
                 self.client_socket.sendto('whoIsLeader'.encode(), neighbor)
-                msg, addr = self.client_socket.recvfrom(1024)
+                try:
+                    msg, addr = self.client_socket.recvfrom(1024)
 
-                if 'leader' in msg:
-                    self.leader = addr
-                    break
+                    if msg == b'i am':
+                        print('leader found')
+                        self.leader = addr
+                        self.heartControl = threading.Thread(target=self.isAlive)
+                        self.heartControl.start()
+                        break
+                except socket.timeout:
+                    pass
+    
         
 
     #* pregunta cada 1s si es leader sigue conectado
@@ -57,16 +78,17 @@ class BroadcasterProcess:
         while True:
             try:
                 heartbeat, laddr = self.client_socket.recvfrom(1024)
-                if heartbeat != '❤️':
+                if heartbeat != b'vVvVv':
                     self.election()
-            except TimeoutError:
+            except socket.timeout:
                 self.election()
             time.sleep(1)
 
     #* señal del leader para dar a conocer que está conectado
     def heartbeat(self):
         while True:
-            self.broadcast('❤️')
+            beat = 'vVvVv'
+            self.broadcast(beat)
             time.sleep(1)
 
     #* primer mensaje broadcast para saber que procesos de encuentran activos
@@ -74,55 +96,66 @@ class BroadcasterProcess:
         msg = b'___'
         for i in range(5000, 5010):
             dest = ('127.0.0.1', i)
-            self.client_socket.sendto(msg, dest)
-            try:
-                msg, addr = self.client_socket.recvfrom(1024)
-            except TimeoutError:
-                print('time out')
-            except Exception as e:
-                print(f'Error en el proceso {self.server_address}: {e}')
-            if msg == '___' and addr == dest and dest not in self.neighbors:
-                self.neighbors.append(addr)
+            if i != self.server_address[1]:
+                self.client_socket.sendto(msg, dest)
+                try:
+                    msg, addr = self.client_socket.recvfrom(1024)
+                    if msg == b'___' and addr == dest and dest not in self.neighbors:
+                        self.neighbors.append(addr)
+                except TimeoutError:
+                    pass
+                except Exception as e:
+                    print(f'Error en el proceso {self.server_address}: {e}')
 
 
 # <--------------------------------------------------------------------------------->
 
     def listen_for_messages(self):
-        imPresent = False
+        # imPresent = False
         while True:
             try:
                 msg, addr = self.client_socket.recvfrom(1024)
                 sec = msg.partition(b'---')
 
-                if msg == '___' and addr not in self.neighbors:
+                if sec[0] == b'___' and addr not in self.neighbors:
                     self.neighbors.append(addr)
-                    self.client_socket.sendto('___', addr)
+                    self.client_socket.sendto('___'.encode(), addr)
                     continue
 
                 if sec[0] == b'election' and addr[1] > self.server_address[1]:
                     self.leader = addr
                     self.role = 'follower'
                     self.client_socket.sendto('accept', addr)
+                    print(f'accept the process {addr} how leader')
                     continue
 
                 if sec[0] == b'election' and addr[1] <= self.server_address[1]:
-                    self.leader = addr
-                    self.election()
+                    self.leader = None
+                    # self.election()
+                    print(f'no accept the process {addr} how leader')
+                    continue
+
+                if sec[0] == b'whoIsLeader' and self.leader == self.server_address:
+                    response = b'i am'
+                    self.client_socket.sendto(response, addr)
                     continue
 
                 if addr != self.server_address:
                     self.sendToLeader(sec[2], sec[0])
                     continue
 
-                if self.role == 'leader' and not imPresent:
-                    imPresent = True
-                    self.beat = threading.Thread(target=self.heartbeat)
-                    self.beat.start()
-                    # self.client_socket.sendto('❤️'.encode(), self.server_address)
+
+                print(f'Mensage recived {sec[0]}')
+                # if self.role == 'leader' and not imPresent:
+                #     self.beat = threading.Thread(target=self.heartbeat)
+                #     self.beat.start()
+                    # self.client_socket.sendto(''.encode(), self.server_address)
                     # self.client_socket.sendto(msg, addr)
 
+            except socket.timeout:
+                pass
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"Error: {e}, mensaje {msg}")
                 break
 
     def sendToLeader(self, role, msg):
@@ -144,13 +177,13 @@ class BroadcasterProcess:
         self.whoIsLeader()
 
         #* si tengo vecinos detecto al leader y empiezo a escuchar el heartbeat
-        if self.neighbors and self.leader != None:
-            self.heartControl = threading.Thread(target=self.isAlive)
-            self.heartControl.start()
+        # if self.neighbors and self.leader != None:
+
 
         if self.leader == None:
-            self.election()            
-
+            # self.election()
+            print(f'actual: {self.leader}')
+            
         try:
             while True:
                 msg = input("Escribe un mensaje para enviar: ")
