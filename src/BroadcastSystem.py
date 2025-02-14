@@ -1,4 +1,3 @@
-
 from src import Process
 
 # Representa una abstracción del sistema
@@ -7,8 +6,14 @@ class BroadcastSystem:
         self.processes = []
 
     def init_processes(self, num_processes):
+        # Ejemplo: crea procesos usando IP de red pública o alguna IP de la red virtual
+        # Aquí se asigna el puerto automáticamente, por ejemplo, 5000 + id
+        # Puedes cambiar "192.168.1.100" por la IP deseada de cada nodo
+        default_host = "192.168.1.100"
         for i in range(num_processes):
-            self.processes.append(Process(i))
+            port = 5000 + i
+            process = Process(i, default_host, port)
+            self.processes.append(process)
 
     def collect_confirmations(self, msg):
         confirmations = []
