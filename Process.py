@@ -15,8 +15,13 @@ class BroadcasterProcess:
         self.last_heartbeat = 0  # Última vez que se recibió heartbeat
         self.heartbeat_timeout = 5  # umbral (segundos) para considerar inactivo al líder
 
+        # Cola para almacenar mensajes y garantizar orden
+        self.message_queue = []
+        self.queue_lock = threading.Lock()
+
     # Método para difundir el mensaje a todos los vecinos
     def broadcast(self, msg):
+        # Todos los mensajes emitidos desde el líder se envían aquí
         for neighbor in self.neighbors:
             self.client_socket.sendto(msg.encode(), neighbor)
 
@@ -60,14 +65,29 @@ class BroadcasterProcess:
             else:
                 time.sleep(1)
 
-    # Escucha todos los mensajes entrantes (incluyendo heartbeats)
+    # Escucha todos los mensajes entrantes (incluyendo heartbeats y mensajes enviados a través del líder)
     def listen_for_messages(self):
         while True:
             try:
                 msg, addr = self.client_socket.recvfrom(1024)
                 if msg == b'heartbeat':
                     self.last_heartbeat = time.time()
-                # Aquí puedes agregar el manejo de otros mensajes (election, greetings, etc.)
+                elif msg == b'election':
+                    # Aquí se procesa el mensaje de elección según corresponda
+                    pass
+                else:
+                    # Si el proceso es líder, lo que reciba lo coloca en la cola y lo difunde en orden
+                    if self.role == 'leader':
+                        with self.queue_lock:
+                            self.message_queue.append(msg.decode())
+                            # Para este ejemplo, se difunden inmediatamente siguiendo el orden de llegada
+                            while self.message_queue:
+                                ordered_msg = self.message_queue.pop(0)
+                                print(f"Leader difunde: {ordered_msg}")
+                                self.broadcast(ordered_msg)
+                    else:
+                        # Los procesos que no son líder reciben difusiones del líder
+                        print(f"Mensaje recibido desde líder: {msg.decode()}")
             except socket.timeout:
                 pass
 
@@ -87,11 +107,22 @@ class BroadcasterProcess:
             target = ('127.0.0.1', i)
             self.client_socket.sendto(msg, target)
 
-    def sendToLeader(self, role, msg):
-        if role != 'leader' and self.role != 'leader':
-            pass
+    # Envía un mensaje al líder si este proceso no es líder
+    def sendToLeader(self, msg):
+        if self.leader:
+            self.client_socket.sendto(msg.encode(), self.leader)
         else:
-            pass
+            print("No hay líder disponible para enviar el mensaje.")
+
+    # Método que decide el origen del mensaje: si es líder, difunde directamente; sino, envía al líder
+    def sendAnyMessage(self, msg):
+        secVal = str(time.localtime(time.time()).tm_sec)
+        complete_msg = msg + '---' + secVal + '---' + self.role
+        if self.role == 'leader':
+            print(f"Leader emitiendo mensaje: {complete_msg}")
+            self.broadcast(complete_msg)
+        else:
+            self.sendToLeader(complete_msg)
 
     def start(self):
         self.listener = threading.Thread(target=self.listen_for_messages)
@@ -107,11 +138,6 @@ class BroadcasterProcess:
                 pass
             finally:
                 self.client_socket.close()
-
-    def sendAnyMessage(self, msg):
-        secVal = str(time.localtime(time.time()).tm_sec)
-        msg += '---' + secVal + '---' + self.role
-        self.broadcast(msg)
 
 
 if __name__ == "__main__":
