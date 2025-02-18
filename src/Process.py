@@ -1,44 +1,44 @@
 import socket
+import threading
+import json
 
-# Representa cada proceso del sistema
+from config import SEQUENCER
+
 class Process:
-    def __init__(self, id, host, port):
-        self.id = id
-        self.host = host
-        self.port = port
-        self.server_address = (host, port)
-        self.state = 'correct'
-        self.message_queue = []
-        
-        # Crea y vincula el socket UDP
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            self.socket.bind(self.server_address)
-            print(f"Proceso {id} ligado a {self.server_address}")
-        except Exception as e:
-            print(f"Error al vincular el proceso {id} en {self.server_address}: {e}")
+    def __init__(self, pid):
+        self.pid = pid
+        self.sequencer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sequencer_socket.connect((SEQUENCER['host'], SEQUENCER['port']))
+        self.register()
+        self.next_seq = 1
+        self.listener_thread = threading.Thread(target=self.listen_sequencer)
+        self.listener_thread.daemon = True
+        self.listener_thread.start()
 
-    def send_message(self, msg, processes):
-        for process in processes:
-            self.socket.sendto(msg.encode(), process.server_address)
+    def register(self):
+        msg = json.dumps({'type': 'register', 'id': self.pid}) + '\n'
+        self.sequencer_socket.send(msg.encode())
 
-    def receive_message(self, msg):
-        self.message_queue.append(msg)
+    def listen_sequencer(self):
+        buffer = ''
+        while True:
+            data = self.sequencer_socket.recv(1024).decode()
+            if not data:
+                break
+            buffer += data
+            while '\n' in buffer:
+                line, buffer = buffer.split('\n', 1)
+                msg = json.loads(line)
+                if msg['type'] == 'ordered':
+                    self.deliver(msg['seq'], msg['sender'], msg['message'])
 
-    def broadcast(self, msg, processes):
-        self.send_message(msg, processes)
-        # Aquí podrías agregar lógica para esperar confirmaciones
+    def deliver(self, seq, sender, message):
+        if seq == self.next_seq:
+            print(f"[{self.pid}] Deliver #{seq}: {message} (from {sender})")
+            self.next_seq += 1
+        else:
+            print(f"Error: Expected seq {self.next_seq}, got {seq}")
 
-    def deliver_messages(self):
-        # Lógica para entregar mensajes en el orden correcto
-        pass
-
-    # Ejemplo de método para confirmar la recepción de un mensaje
-    def confirm_receipt(self, msg):
-        # Aquí podrías implementar la confirmación
-        return f"Proceso {self.id} confirmó el mensaje: {msg}"
-
-    # Ejemplo de método para determinar si el proceso está activo
-    def is_active(self):
-        # Una implementación simple que siempre retorna True
-        return True
+    def broadcast(self, message):
+        msg = json.dumps({'type': 'broadcast', 'message': message}) + '\n'
+        self.sequencer_socket.send(msg.encode())
