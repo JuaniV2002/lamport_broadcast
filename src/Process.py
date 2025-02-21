@@ -20,20 +20,20 @@ class Process:
         self.lock = threading.Lock()
         self.pending_messages = []
         
-        # Configurar servidor
+        # Configure server
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind((self.host, self.port))
         self.server.listen(5)
         
-        # Iniciar hilos
+        # Start threads
         threading.Thread(target=self.listen_clients, daemon=True).start()
         threading.Thread(target=self.heartbeat_checker, daemon=True).start()
         threading.Thread(target=self.discover_leader, daemon=True).start()
 
-    # ----------------------------------------
+    # -----------------------------
     # Prompt & Print Helpers
-    # ----------------------------------------
+    # -----------------------------
     def get_prompt(self):
         current_leader = self.leader if self.leader else "Desconocido"
         return f"[{self.pid} | Líder: {current_leader}] Ingrese mensaje: "
@@ -44,30 +44,25 @@ class Process:
         and reprints the prompt so that the user can continue typing.
         """
         prompt = self.get_prompt()
-        # Move cursor to start of line:
         sys.stdout.write('\r')
-        # Overwrite with spaces (80 is arbitrary; adjust as needed):
         sys.stdout.write(' ' * 80)
-        # Move cursor back again:
         sys.stdout.write('\r')
 
-        print(msg)  # Print the asynchronous message
-        sys.stdout.write(prompt)  # Re-print the prompt
+        print(msg)
+        sys.stdout.write(prompt)
         sys.stdout.flush()
 
     def print_chat(self, text):
         """
-        Prints a 'chat feed' message in a different style/color 
-        so it looks distinct from the user prompt.
+        Prints a 'chat feed' message in a different color/style so it's 
+        distinct from the user prompt.
         """
-        # Example: ANSI escape code \033[96m for bright cyan text.
-        # Ends with \033[0m to reset the color.
-        colored_text = f"\033[96m{text}\033[0m"
+        colored_text = f"\033[96m{text}\033[0m"  # Bright cyan
         self.async_print(colored_text)
 
-    # ----------------------------------------
-    # Communication & Broadcast
-    # ----------------------------------------
+    # -----------------------------
+    # Communication
+    # -----------------------------
     def send_to_node(self, node, message):
         try:
             with socket.create_connection((node['host'], node['port']), timeout=1) as s:
@@ -77,20 +72,23 @@ class Process:
             return False
 
     def broadcast_ordered(self, message):
-        # Let *this* process handle the message as well
+        """
+        Sends an 'ordered' message to all other processes 
+        AND handles it locally so the leader sees its own messages.
+        """
+        # Leader handles the message locally (so it sees its own chat text).
         self.handle_message(message)
-        # Then send to all other nodes
+        # Then broadcast to the other nodes.
         for node_id in self.nodes:
             self.send_to_node(self.nodes[node_id], message)
 
-    # ----------------------------------------
-    # Leader Election Logic
-    # ----------------------------------------
+    # -----------------------------
+    # Leader Election
+    # -----------------------------
     def discover_leader(self):
-        time.sleep(1)  # Esperar inicialización de otros nodos
-        for node_id in sorted(self.nodes, reverse=True):
-            if self.send_to_node(self.nodes[node_id], {'type': 'leader_inquiry'}):
-                return
+        time.sleep(1)  
+        # In a Bully algorithm, every process that comes online starts an election
+        # so that the highest ID eventually wins.
         self.start_election()
 
     def start_election(self):
@@ -99,17 +97,26 @@ class Process:
         self.election_in_progress = True
 
         self.print_chat(f"Iniciando elección desde {self.pid}...")
+
+        # Find processes with higher ID
         higher_nodes = [n for n in self.nodes if n > self.pid]
         if not higher_nodes:
+            # No higher node => we become leader
             self.become_leader()
+            self.election_in_progress = False
             return
 
+        # Send 'election' to all higher nodes
         election_ack = False
         for node_id in higher_nodes:
-            if self.send_to_node(self.nodes[node_id], {'type': 'election'}):
+            success = self.send_to_node(self.nodes[node_id], {
+                'type': 'election',
+                'sender': self.pid
+            })
+            if success:
                 election_ack = True
-                break
 
+        # If no higher node responded, become leader
         if not election_ack:
             self.become_leader()
 
@@ -129,30 +136,42 @@ class Process:
                 'leader': self.pid
             })
 
-    # ----------------------------------------
+    # -----------------------------
     # Message Handling
-    # ----------------------------------------
+    # -----------------------------
     def handle_message(self, data):
         if data['type'] == 'heartbeat':
+            # Keep track of last heartbeat
             self.last_heartbeat = time.time()
             if data['leader'] != self.leader:
                 self.leader = data['leader']
                 self.print_chat(f"Líder actualizado: {self.leader}")
 
         elif data['type'] == 'election':
-            # Se espera que el mensaje 'sender' esté incluido en la data para responder
+            # Another node with a lower ID is starting an election.
+            # We should respond (ack) and start our own election if we're higher.
             sender_id = data.get('sender', '')
             if sender_id in self.nodes:
                 self.send_to_node(self.nodes[sender_id], {'type': 'election_ack'})
-            self.start_election()
+            # If we are higher than the sender, we also start an election
+            if self.pid > sender_id:
+                self.start_election()
+
+        elif data['type'] == 'election_ack':
+            # If we get an ack from a higher node, it means that node 
+            # might become the leader, so we wait for it to announce.
+            pass
 
         elif data['type'] == 'new_leader':
+            # A node just became leader
             self.leader = data['leader']
             self.print_chat(f"Nuevo líder asignado: {self.leader}")
-            if self.is_leader:
+            if self.is_leader and self.leader != self.pid:
                 self.is_leader = False
 
         elif data['type'] == 'broadcast':
+            # Non-leaders send 'broadcast' to the leader.
+            # The leader then transforms it into an 'ordered' message.
             if self.is_leader:
                 with self.lock:
                     self.sequence_number += 1
@@ -166,19 +185,21 @@ class Process:
                 self.pending_messages.append(data)
 
         elif data['type'] == 'ordered':
-            # This is an actual chat message from a leader
+            # Final chat message from the leader
             current_leader = self.leader if self.leader else "Desconocido"
             self.print_chat(f"[{self.pid} -> Líder: {current_leader}] {data['message']}")
 
-    # ----------------------------------------
+    # -----------------------------
     # Background Threads
-    # ----------------------------------------
+    # -----------------------------
     def heartbeat_checker(self):
         while True:
             if self.is_leader:
+                # Leader sends heartbeats
                 self.broadcast_ordered({'type': 'heartbeat', 'leader': self.pid})
                 time.sleep(HEARTBEAT_INTERVAL)
             else:
+                # Followers watch for heartbeats
                 if time.time() - self.last_heartbeat > ELECTION_TIMEOUT:
                     self.print_chat("¡Atención! Líder no responde. Iniciando elección...")
                     self.start_election()
@@ -202,24 +223,23 @@ class Process:
             msg = self.pending_messages.pop(0)
             self.handle_message(msg)
 
-    # ----------------------------------------
-    # Public API
-    # ----------------------------------------
+    # -----------------------------
+    # "API" for application.py
+    # -----------------------------
     def broadcast(self, message):
-        """
-        Called by application.py whenever the user types a message.
-        """
         if not message:
             return  # Ignore empty messages
         if self.is_leader:
             with self.lock:
                 self.sequence_number += 1
-                self.broadcast_ordered({
+                ordered_msg = {
                     'type': 'ordered',
                     'seq': self.sequence_number,
                     'message': message
-                })
+                }
+                self.broadcast_ordered(ordered_msg)
         else:
+            # Send a 'broadcast' request to the leader
             if self.leader:
                 self.send_to_node(PROCESSES[self.leader], {
                     'type': 'broadcast',

@@ -1,4 +1,3 @@
-# config.py
 NUM_PROCESSES = 3  # Change this value to support any number of processes
 BASE_PORT = 5000
 
