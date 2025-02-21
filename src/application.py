@@ -1,13 +1,12 @@
 import sys
-from Process import Process
+from process import Process
 
 def main(pid):
     process = Process(pid)
     try:
         while True:
-            message = input("Mensaje a broadcast (o 'exit'): ")
-            if message.lower() == 'exit':
-                break
+            prompt = process.get_prompt()
+            message = input(prompt)
             process.broadcast(message)
     except KeyboardInterrupt:
         print("\nApagando proceso...")
