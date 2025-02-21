@@ -1,9 +1,11 @@
+# config.py
+NUM_PROCESSES = 5  # Change this value to support any number of processes
+BASE_PORT = 5000
+
+# Automatically generate process configurations for p1, p2, ..., pN.
 PROCESSES = {
-    'p1': {'host': 'localhost', 'port': 5000},
-    'p2': {'host': 'localhost', 'port': 5001},
-    'p3': {'host': 'localhost', 'port': 5002},
-    'p4': {'host': 'localhost', 'port': 5003},
-    'p5': {'host': 'localhost', 'port': 5004},
+    f'p{i+1}': {'host': 'localhost', 'port': BASE_PORT + i}
+    for i in range(NUM_PROCESSES)
 }
 
 ELECTION_TIMEOUT = 5
