@@ -155,7 +155,7 @@ class Process:
             msg = self.pending_messages.pop(0)
             self.handle_message(msg)
 
-    # --- API para aplicación ---
+    # --- "API" para aplicación ---
     def broadcast(self, message):
         if self.is_leader:
             with self.lock:
