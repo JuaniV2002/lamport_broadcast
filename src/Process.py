@@ -4,21 +4,43 @@ import threading
 import json
 import time
 import random
-from config import PROCESSES, ELECTION_TIMEOUT, HEARTBEAT_INTERVAL
+from config import PROCESSES, NUM_PROCESSES
 
 class Process:
     def __init__(self, pid):
+        # Adaptar el pid para que funcione con o sin padding de ceros
+        self.original_pid = pid
+        # Si pid no está en PROCESSES, intentamos encontrar la clave correspondiente
+        if pid not in PROCESSES:
+            # Extraer el número de pid (quita la 'p' del inicio)
+            if pid.startswith('p'):
+                num = pid[1:]
+                # Buscar la clave en PROCESSES que coincida con el número
+                for key in PROCESSES:
+                    if key.startswith('p') and key[1:].lstrip('0') == num:
+                        pid = key
+                        break
+        
+        # Si aún no encontramos el pid, mostramos un error claro
+        if pid not in PROCESSES:
+            print(f"Error: Proceso '{self.original_pid}' no encontrado. IDs válidos: {list(PROCESSES.keys())}")
+            sys.exit(1)
+            
         self.pid = pid
         self.host = PROCESSES[pid]['host']
         self.port = PROCESSES[pid]['port']
-        self.leader = None
-        self.sequence_number = 0
         self.nodes = {n: PROCESSES[n] for n in PROCESSES if n != pid}
-        self.is_leader = False
-        self.election_in_progress = False
-        self.last_heartbeat = time.time()
+        
+        # Initialize Lamport clock
+        self.lamport_clock = 0
         self.lock = threading.Lock()
-        self.pending_messages = []
+        
+        # Data structures for total order broadcast
+        # For each message id, store the list of proposals received.
+        self.proposals = {}   # message_id -> list of proposal timestamps
+        # Hold-back queue for final messages to be delivered
+        self.pending_messages = []  # each message is a dict with keys: id, final_timestamp, sender, message
+        self.delivered = set()      # track delivered message ids
         
         # Configure server
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -26,42 +48,30 @@ class Process:
         self.server.bind((self.host, self.port))
         self.server.listen(5)
         
-        # Start threads
+        # Start a thread to listen for incoming connections.
         threading.Thread(target=self.listen_clients, daemon=True).start()
-        threading.Thread(target=self.heartbeat_checker, daemon=True).start()
-        threading.Thread(target=self.discover_leader, daemon=True).start()
 
     # -----------------------------
     # Prompt & Print Helpers
     # -----------------------------
     def get_prompt(self):
-        current_leader = self.leader if self.leader else "Desconocido"
-        return f"[{self.pid} | Líder: {current_leader}] Ingrese mensaje: "
+        return f"[{self.pid} | Clock: {self.lamport_clock}] Ingrese mensaje: "
 
     def async_print(self, msg):
-        """
-        Clears the current input line, prints an asynchronous message, 
-        and reprints the prompt so that the user can continue typing.
-        """
         prompt = self.get_prompt()
         sys.stdout.write('\r')
         sys.stdout.write(' ' * 80)
         sys.stdout.write('\r')
-
         print(msg)
         sys.stdout.write(prompt)
         sys.stdout.flush()
 
     def print_chat(self, text):
-        """
-        Prints a 'chat feed' message in a different color/style so it's 
-        distinct from the user prompt.
-        """
-        colored_text = f"\033[96m{text}\033[0m"  # Bright cyan
+        colored_text = f"\033[96m{text}\033[0m"  # Bright cyan for chat messages
         self.async_print(colored_text)
 
     # -----------------------------
-    # Communication
+    # Communication Helpers
     # -----------------------------
     def send_to_node(self, node, message):
         try:
@@ -71,140 +81,112 @@ class Process:
         except:
             return False
 
-    def broadcast_ordered(self, message):
-        """
-        Sends an 'ordered' message to all other processes 
-        AND handles it locally so the leader sees its own messages.
-        """
-        # Leader handles the message locally (so it sees its own chat text).
+    def broadcast_to_all(self, message):
+        # Send the message to all nodes, including self.
         self.handle_message(message)
-        # Then broadcast to the other nodes.
         for node_id in self.nodes:
             self.send_to_node(self.nodes[node_id], message)
 
     # -----------------------------
-    # Leader Election
+    # Total Order Broadcast (ISIS Algorithm)
     # -----------------------------
-    def discover_leader(self):
-        time.sleep(1)  
-        # In a Bully algorithm, every process that comes online starts an election
-        # so that the highest ID eventually wins.
-        self.start_election()
+    def broadcast(self, message_text):
+        # Step 1: Increment clock and create a unique message ID.
+        with self.lock:
+            self.lamport_clock += 1
+            current_clock = self.lamport_clock
+        message_id = f"{self.pid}_{current_clock}_{random.randint(0,10000)}"
+        # Initialize proposals for this message.
+        self.proposals[message_id] = []
+        # Create a proposal request message.
+        proposal_request = {
+            'type': 'proposal_request',
+            'id': message_id,
+            'sender': self.pid,
+            'tentative': current_clock,
+            'message': message_text
+        }
+        # Broadcast the proposal request to all processes.
+        self.broadcast_to_all(proposal_request)
+        # Spawn a thread to wait for proposals and then send the final message.
+        threading.Thread(target=self.collect_and_send_final, args=(message_id, proposal_request), daemon=True).start()
 
-    def start_election(self):
-        if self.election_in_progress:
-            return
-        self.election_in_progress = True
+    def collect_and_send_final(self, message_id, proposal_request):
+        # Wait until proposals from all processes have been collected.
+        while len(self.proposals[message_id]) < len(PROCESSES):
+            time.sleep(0.05)
+        # Final timestamp is the maximum of all proposals.
+        final_timestamp = max(self.proposals[message_id])
+        with self.lock:
+            self.lamport_clock = max(self.lamport_clock, final_timestamp) + 1
+        # Create the final message.
+        final_message = {
+            'type': 'final',
+            'id': message_id,
+            'final_timestamp': final_timestamp,
+            'sender': proposal_request['sender'],
+            'message': proposal_request['message']
+        }
+        # Broadcast the final message to all processes.
+        self.broadcast_to_all(final_message)
 
-        self.print_chat(f"Iniciando elección desde {self.pid}...")
-
-        # Find processes with higher ID
-        higher_nodes = [n for n in self.nodes if n > self.pid]
-        if not higher_nodes:
-            # No higher node => we become leader
-            self.become_leader()
-            self.election_in_progress = False
-            return
-
-        # Send 'election' to all higher nodes
-        election_ack = False
-        for node_id in higher_nodes:
-            success = self.send_to_node(self.nodes[node_id], {
-                'type': 'election',
-                'sender': self.pid
-            })
-            if success:
-                election_ack = True
-
-        # If no higher node responded, become leader
-        if not election_ack:
-            self.become_leader()
-
-        self.election_in_progress = False
-
-    def become_leader(self):
-        self.print_chat(f"*** {self.pid} ES AHORA EL LÍDER ***")
-        self.is_leader = True
-        self.leader = self.pid
-        self.announce_leadership()
-        self.process_pending_messages()
-
-    def announce_leadership(self):
-        for node_id in self.nodes:
-            self.send_to_node(self.nodes[node_id], {
-                'type': 'new_leader',
-                'leader': self.pid
-            })
+    def deliver_messages(self):
+        # Sort pending messages by final_timestamp and then by sender (as a tie-breaker).
+        self.pending_messages.sort(key=lambda msg: (msg['final_timestamp'], msg['sender']))
+        delivered_any = True
+        while delivered_any:
+            delivered_any = False
+            if self.pending_messages:
+                msg = self.pending_messages[0]
+                if msg['id'] not in self.delivered:
+                    self.print_chat(f"[{msg['sender']} | {msg['final_timestamp']}] {msg['message']}")
+                    self.delivered.add(msg['id'])
+                    self.pending_messages.pop(0)
+                    delivered_any = True
 
     # -----------------------------
     # Message Handling
     # -----------------------------
     def handle_message(self, data):
-        if data['type'] == 'heartbeat':
-            # Keep track of last heartbeat
-            self.last_heartbeat = time.time()
-            if data['leader'] != self.leader:
-                self.leader = data['leader']
-                self.print_chat(f"Líder actualizado: {self.leader}")
-
-        elif data['type'] == 'election':
-            # Another node with a lower ID is starting an election.
-            # We should respond (ack) and start our own election if we're higher.
-            sender_id = data.get('sender', '')
-            if sender_id in self.nodes:
-                self.send_to_node(self.nodes[sender_id], {'type': 'election_ack'})
-            # If we are higher than the sender, we also start an election
-            if self.pid > sender_id:
-                self.start_election()
-
-        elif data['type'] == 'election_ack':
-            # If we get an ack from a higher node, it means that node 
-            # might become the leader, so we wait for it to announce.
-            pass
-
-        elif data['type'] == 'new_leader':
-            # A node just became leader
-            self.leader = data['leader']
-            self.print_chat(f"Nuevo líder asignado: {self.leader}")
-            if self.is_leader and self.leader != self.pid:
-                self.is_leader = False
-
-        elif data['type'] == 'broadcast':
-            # Non-leaders send 'broadcast' to the leader.
-            # The leader then transforms it into an 'ordered' message.
-            if self.is_leader:
-                with self.lock:
-                    self.sequence_number += 1
-                    ordered_msg = {
-                        'type': 'ordered',
-                        'seq': self.sequence_number,
-                        'message': data['message']
-                    }
-                    self.broadcast_ordered(ordered_msg)
+        msg_type = data.get('type')
+        if msg_type == 'proposal_request':
+            # When receiving a proposal request, update local clock.
+            tentative = data.get('tentative', 0)
+            with self.lock:
+                self.lamport_clock = max(self.lamport_clock, tentative) + 1
+                proposal = self.lamport_clock
+            # Send back a proposal reply.
+            reply = {
+                'type': 'proposal_reply',
+                'id': data['id'],
+                'proposal': proposal,
+                'sender': self.pid
+            }
+            if data['sender'] == self.pid:
+                # If the request originated here, handle directly.
+                self.handle_message(reply)
             else:
-                self.pending_messages.append(data)
+                self.send_to_node(PROCESSES[data['sender']], reply)
 
-        elif data['type'] == 'ordered':
-            # Final chat message from the leader
-            current_leader = self.leader if self.leader else "Desconocido"
-            self.print_chat(f"[{self.pid} -> Líder: {current_leader}] {data['message']}")
+        elif msg_type == 'proposal_reply':
+            # Only the originator of the message collects proposals.
+            message_id = data['id']
+            if message_id in self.proposals:
+                self.proposals[message_id].append(data['proposal'])
+                with self.lock:
+                    self.lamport_clock = max(self.lamport_clock, data['proposal']) + 1
+
+        elif msg_type == 'final':
+            # On receiving the final message, update clock and add to pending messages.
+            final_timestamp = data.get('final_timestamp', 0)
+            with self.lock:
+                self.lamport_clock = max(self.lamport_clock, final_timestamp) + 1
+            self.pending_messages.append(data)
+            self.deliver_messages()
 
     # -----------------------------
     # Background Threads
     # -----------------------------
-    def heartbeat_checker(self):
-        while True:
-            if self.is_leader:
-                # Leader sends heartbeats
-                self.broadcast_ordered({'type': 'heartbeat', 'leader': self.pid})
-                time.sleep(HEARTBEAT_INTERVAL)
-            else:
-                # Followers watch for heartbeats
-                if time.time() - self.last_heartbeat > ELECTION_TIMEOUT:
-                    self.print_chat("¡Atención! Líder no responde. Iniciando elección...")
-                    self.start_election()
-                time.sleep(1)
-
     def listen_clients(self):
         while True:
             client, addr = self.server.accept()
@@ -213,41 +195,15 @@ class Process:
     def client_handler(self, client):
         try:
             while True:
-                data = json.loads(client.recv(1024).decode())
-                self.handle_message(data)
-        except:
+                data = client.recv(1024)
+                if not data:
+                    break
+                try:
+                    message = json.loads(data.decode())
+                    self.handle_message(message)
+                except Exception as e:
+                    print("Error processing message:", e)
+        except Exception as e:
+            pass
+        finally:
             client.close()
-
-    def process_pending_messages(self):
-        while self.pending_messages:
-            msg = self.pending_messages.pop(0)
-            self.handle_message(msg)
-
-    # -----------------------------
-    # "API" for application.py
-    # -----------------------------
-    def broadcast(self, message):
-        if not message:
-            return  # Ignore empty messages
-        if self.is_leader:
-            with self.lock:
-                self.sequence_number += 1
-                ordered_msg = {
-                    'type': 'ordered',
-                    'seq': self.sequence_number,
-                    'message': message
-                }
-                self.broadcast_ordered(ordered_msg)
-        else:
-            # Send a 'broadcast' request to the leader
-            if self.leader:
-                self.send_to_node(PROCESSES[self.leader], {
-                    'type': 'broadcast',
-                    'message': message
-                })
-            else:
-                self.print_chat("No hay líder disponible. Mensaje en cola.")
-                self.pending_messages.append({
-                    'type': 'broadcast',
-                    'message': message
-                })
