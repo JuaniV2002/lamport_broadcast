@@ -1,5 +1,5 @@
 import sys
-from Process import Process
+from process import Process
 
 def main(pid):
     process = Process(pid)
