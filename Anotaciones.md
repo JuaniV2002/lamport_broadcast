@@ -20,9 +20,9 @@
 
 La idea en que se basa tiene en cuenta un reloj lógico, el mismo constantemente va a incrementando con las diferentes acciones que realiza cada proceso, con ello se vas creando `id`'s unicos, de modo junto con un valor generado de forma pseudo-aleatoria (0-10.000), cada mensaje enviado es completemente distinguible de los demas.
 
-**Envio/manejo de mensajes**: 
-**Broadcast**: una vez armado el mensaje lo distribuye a los demas procesos (nodos) de la red.
-**Recepcion de mensajes**: cada proceso se mantienen escuchando a la espera de que algun otro envie algo nuevo.
+**Envío/manejo de mensajes**: 
+**Broadcast**: una vez armado el mensaje lo distribuye a los demás procesos (nodos) de la red.
+**Recepcion de mensajes**: cada proceso se mantiene escuchando a la espera de que algún otro envíe algo nuevo.
 
 
 **Algoritmos alternativos**
@@ -33,7 +33,7 @@ La idea en que se basa tiene en cuenta un reloj lógico, el mismo constantemente
 El algoritmo de Paxos es un protocolo de consenso distribuido que permite a un conjunto de procesos llegar a un acuerdo sobre un valor propuesto, incluso en presencia de fallos. En este caso, se utiliza Paxos para elegir un líder.
 
 **Pseudocódigo**
-```markdown
+```
 INICIO
   Proposer:
     elige un número de propuesta único
