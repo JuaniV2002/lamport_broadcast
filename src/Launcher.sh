@@ -12,7 +12,7 @@ OS=$(uname -s)
 
 case $OS in
   Linux|Darwin)
-    session="my_session"
+    session="broadcast_session"
     tmux kill-session -t "$session" 2>/dev/null || true
 
     # 1) crear sesión en background con un shell
@@ -23,12 +23,12 @@ case $OS in
 
     # 3) splits para los restantes
     for cmd in "${comandos[@]:1}"; do
-      tmux split-window -h -t "$session"
+      tmux new-window -t "$session"
       tmux send-keys -t "$session" "$cmd" C-m
     done
 
-    # 4) organizar y adjuntar
-    tmux select-layout -t "$session" tiled
+    # 4) seleccionar primera ventana y adjuntar
+    tmux select-window -t "$session:0"
     tmux attach-session -t "$session"
     ;;
   *)
