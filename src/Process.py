@@ -4,26 +4,24 @@ import threading
 import json
 import time
 import random
-from config import PROCESSES, NUM_PROCESSES
+from config import PROCESSES
 
 class Process:
     def __init__(self, pid):
-        # Adaptar el pid para que funcione con o sin padding de ceros
+        # Adapt pid to match the keys in PROCESSES
         self.original_pid = pid
-        # Si pid no está en PROCESSES, intentamos encontrar la clave correspondiente
         if pid not in PROCESSES:
-            # Extraer el número de pid (quita la 'p' del inicio)
             if pid.startswith('p'):
                 num = pid[1:]
-                # Buscar la clave en PROCESSES que coincida con el número
+                # Search for the corresponding key in PROCESSES
                 for key in PROCESSES:
                     if key.startswith('p') and key[1:].lstrip('0') == num:
                         pid = key
                         break
         
-        # Si aún no encontramos el pid, mostramos un error claro
+        # If still not found, raise an error
         if pid not in PROCESSES:
-            print(f"Error: Proceso '{self.original_pid}' no encontrado. IDs válidos: {list(PROCESSES.keys())}")
+            print(f"Error: Process '{self.original_pid}' not found. Valid IDs: {list(PROCESSES.keys())}")
             sys.exit(1)
             
         self.pid = pid
@@ -36,16 +34,15 @@ class Process:
         self.lock = threading.Lock()
         
         # Data structures for total order broadcast
-        # For each message id, store the list of proposals received.
         self.proposals = {}   # message_id -> list of proposal timestamps
-        # Hold-back queue for final messages to be delivered
-        self.pending_messages = []  # each message is a dict with keys: id, final_timestamp, sender, message
-        self.delivered = set()      # track delivered message ids
+        self.pending_messages = []  # Hold-back queue for final messages to be delivered
+        self.delivered = set()  # track delivered message ids
         
         # Configure server
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind((self.host, self.port))
+        # self.server.bind(('0.0.0.0', self.port)) To test on different interfaces, uncomment this line and comment the line above.
         self.server.listen(5)
         
         # Start a thread to listen for incoming connections.
@@ -55,20 +52,15 @@ class Process:
     # Prompt & Print Helpers
     # -----------------------------
     def get_prompt(self):
-        return f"[{self.pid} | Clock: {self.lamport_clock}] Ingrese mensaje: "
-
-    def async_print(self, msg):
-        prompt = self.get_prompt()
-        sys.stdout.write('\r')
-        sys.stdout.write(' ' * 80)
-        sys.stdout.write('\r')
-        print(msg)
-        sys.stdout.write(prompt)
-        sys.stdout.flush()
+        return f"[{self.pid} | Clock: {self.lamport_clock}] Enter message: "
 
     def print_chat(self, text):
-        colored_text = f"\033[96m{text}\033[0m"  # Bright cyan for chat messages
-        self.async_print(colored_text)
+        # Clear current line and print chat message in color, then restore prompt
+        sys.stdout.write('\r\033[K')  # Clear line
+        colored_text = f"\033[96m{text}\033[0m"
+        print(colored_text)
+        sys.stdout.write(self.get_prompt())
+        sys.stdout.flush()
 
     # -----------------------------
     # Communication Helpers
@@ -189,7 +181,7 @@ class Process:
     # -----------------------------
     def listen_clients(self):
         while True:
-            client, addr = self.server.accept()
+            client, _ = self.server.accept()
             threading.Thread(target=self.client_handler, args=(client,), daemon=True).start()
 
     def client_handler(self, client):
