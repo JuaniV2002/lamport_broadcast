@@ -1,13 +1,13 @@
 import sys
-from Process import Process
+from process import Process
 
 def main(pid):
-    process = Process(pid)
+    current_process = Process(pid)
     try:
         while True:
-            prompt = process.get_prompt()
+            prompt = current_process.get_prompt()
             message = input(prompt)
-            process.broadcast(message)
+            current_process.broadcast(message)
     except KeyboardInterrupt:
         print("\nShutting down process...")
         sys.exit(0)

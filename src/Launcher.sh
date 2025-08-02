@@ -3,7 +3,7 @@ set -euo pipefail
 PS4='+ $BASH_SOURCE:$LINENO: ' && set -x
 
 # Command list
-comandos=(
+commands=(
   "python3 application.py p1"
   "python3 application.py p2"
 )
@@ -20,11 +20,11 @@ case $OS in
 
     # 2) send first command to panel 0
     tmux rename-window -t "$session:0" "Process-P1"
-    tmux send-keys -t "$session:0.0" "${comandos[0]}" C-m
+    tmux send-keys -t "$session:0.0" "${commands[0]}" C-m
 
     # 3) new windows for the remaining
     i=1
-    for cmd in "${comandos[@]:1}"; do
+    for cmd in "${commands[@]:1}"; do
       tmux new-window -t "$session" -n "Process-P$((i+1))"
       tmux send-keys -t "$session" "$cmd" C-m
       ((i++))
