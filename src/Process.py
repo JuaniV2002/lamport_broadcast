@@ -80,9 +80,32 @@ class Process:
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind((self.host, self.port))
 
+    def _sort_neighbor_msgs(self):
+        """Sort messages from neighbors based on their IDs"""
+        while True:
+            for node_id, (msgs, last_id) in self.process_msgs.items():
+                msgs.sort(key=lambda x: int(x[0]))
+            
+                for msg in msgs:
+                    if msg[0]-1 == last_id:
+                        self.pending_messages.append({
+                            'id': msg[0],
+                            'sender': node_id,
+                            'timestamp': self.lamport_clock,
+                            'message': msg[1],
+                            'originator': node_id  # Track the original sender
+                        })
+                        msgs.remove(msg)  # Remove delivered message
+                        self.process_msgs[node_id] = (msgs, msg[0])
+                    else:
+                        break
+            self.deliver_messages()
+            threading.Event().wait(0.1)  # Sleep to avoid busy waiting
+
     def _start_background_threads(self):
         """Start background threads for message handling"""
         threading.Thread(target=self.listen_messages, daemon=True).start()
+        threading.Thread(target=self._sort_neighbor_msgs, daemon=True).start()
 
         self._display_neighbors()
 
@@ -195,7 +218,6 @@ class Process:
         # If this message didn't originate from us, flood it to other neighbors
         if originator != self.pid:
             # Find which neighbor sent us this message to avoid sending it back
-            # sender_node_id = None
             for node_id, node_info in PROCESSES.items():
                 if node_info['host'] == self.host and node_info['port'] == self.port:
                     continue  # Skip ourselves
@@ -207,16 +229,8 @@ class Process:
 
         # Only process messages from our direct neighbors for ordering
         if msg_sender in self.process_msgs:
-            # Check if the message is out of order
-            if int(msg_id)-1 != int(self.process_msgs[msg_sender][1]) and int(msg_id) > int(self.process_msgs[msg_sender][1]):
-                self.process_msgs[msg_sender][0].append((msg_id, msg))
-
-            # If the message is in order, deliver it
-            elif int(msg_id)-1 == int(self.process_msgs[msg_sender][1]) and self.max_id(msg_sender) <= int(msg_id)-1:
-                lista = self.process_msgs[msg_sender][0]
-                lista.append((msg_id, msg))
-                self.process_msgs[msg_sender] = (lista, msg_id)
-                self.pending_messages.append(data)
+            # Add the message to the process_msgs list for this sender to process later
+            self.process_msgs[msg_sender][0].append((msg_id, msg))
         else:
             # For messages from non-direct neighbors (received via flooding), just add to pending
             self.pending_messages.append(data)
@@ -236,13 +250,3 @@ class Process:
                     self.delivered.add((msg['id'], msg['sender']))
                     self.pending_messages.pop(0)
                     delivered_any = True
-
-    # -----------------------------
-    # Utility Functions
-    # -----------------------------
-    def max_id(self, sender):
-        """Find the maximum message ID for a given sender"""
-        id = 0
-        for msg in self.process_msgs[sender][0]:
-            id = max(id, int(msg[0]))
-        return id
