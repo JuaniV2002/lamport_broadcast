@@ -33,8 +33,11 @@ class Process:
         # Background Services
         self._start_background_threads()
 
+    # -----------------------------
+    # Initialization and Setup
+    # -----------------------------
     def _validate_and_set_pid(self, pid):
-        # Validate and normalize the process ID
+        """Validate and normalize the process ID"""
         if pid not in PROCESSES:
             if pid.startswith('p'):
                 num = pid[1:]
@@ -52,7 +55,7 @@ class Process:
         self.pid = pid
 
     def _setup_neighbor_nodes(self):
-        # Configure neighbor nodes based on partition topology
+        """Configure neighbor nodes based on partition topology"""
         previous_mod = (int(self.pid[1:]) - 1) % PARTITION_SIZE
         next_mod = (int(self.pid[1:]) + 1) % PARTITION_SIZE
         
@@ -72,22 +75,35 @@ class Process:
             self.process_msgs[p] = (list(), 0)
 
     def _setup_udp_server(self):
-        # Configure and bind the UDP server socket
+        """Configure and bind the UDP server socket"""
         self.server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind((self.host, self.port))
 
     def _start_background_threads(self):
-        # Start background threads for message handling
+        """Start background threads for message handling"""
         threading.Thread(target=self.listen_messages, daemon=True).start()
 
+        self._display_neighbors()
+
+    def _display_neighbors(self):
+        """Display the immediate neighbor nodes of this process"""
+        if self.nodes:
+            neighbor_ids = list(self.nodes.keys())
+            neighbor_str = ", ".join(neighbor_ids)
+            print(f"\n[{self.pid}] Immediate neighbors: {neighbor_str}")
+        else:
+            print(f"\n[{self.pid}] No immediate neighbors found")
+
     # -----------------------------
-    # Prompt & Print Helpers
+    # Prompt & Display
     # -----------------------------
     def get_prompt(self):
+        """Generate the command prompt with process ID and clock"""
         return f"[{self.pid} | Clock: {self.lamport_clock}] Enter message: "
 
     def print_chat(self, text):
+        """Display a chat message with color formatting"""
         # Clear current line and print chat message in color, then restore prompt
         sys.stdout.write('\r\033[K')  # Clear line
         colored_text = f"\033[96m{text}\033[0m"
@@ -96,9 +112,10 @@ class Process:
         sys.stdout.flush()
 
     # -----------------------------
-    # Communication Helpers
+    # Network Communication
     # -----------------------------
     def send_to_node(self, node, message):
+        """Send a message to a specific node via UDP"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 data = json.dumps(message).encode()
@@ -108,21 +125,32 @@ class Process:
             print(f"Error sending to {node}: {e}")
             return False
 
-    # -----------------------------
-    # Flooding Implementation
-    # -----------------------------
     def flood_message(self, message, exclude_node=None):
-        # Floods the message to all neighbor nodes except the one specified in exclude_node
+        """Flood the message to all neighbor nodes except the excluded one"""
         for node_id in self.nodes:
             if exclude_node and node_id == exclude_node:
                 continue
             self.send_to_node(self.nodes[node_id], message)
 
+    def listen_messages(self):
+        """Background thread to continuously listen for incoming messages"""
+        while True:
+            try:
+                data, _ = self.server.recvfrom(1024)
+                try:
+                    message = json.loads(data.decode())
+                    self.handle_message(message)
+                except Exception as e:
+                    print("Error processing message:", e)
+            except Exception as e:
+                print(f"Error receiving message: {e}")
+
     # -----------------------------
-    # Broadcasting
+    # Broadcasting and Ordering
     # -----------------------------
     def broadcast(self, message_text):
-        # Step 1: Increment clock and create a unique message ID.
+        """Broadcast a message to all neighbor nodes with proper ordering"""
+        # Increment clock and create a unique message ID.
         with self.lock:
             current_clock = self.lamport_clock
             self.lamport_clock += 1
@@ -147,30 +175,8 @@ class Process:
         # Flood the message to all neighbor nodes
         self.flood_message(message)
 
-    def deliver_messages(self):
-        # Sort pending messages by final_timestamp and then by sender (as a tie-breaker).
-        self.pending_messages.sort(key=lambda msg: (msg['timestamp'], msg['sender']))
-        delivered_any = True
-        while delivered_any:
-            delivered_any = False
-            if self.pending_messages:
-                msg = self.pending_messages[0]
-                if msg['id'] not in self.delivered:
-                    self.print_chat(f"[{msg['sender']} | {msg['timestamp']}] {msg['message']}")
-                    self.delivered.add((msg['id'], msg['sender']))
-                    self.pending_messages.pop(0)
-                    delivered_any = True
-
-    # -----------------------------
-    # Message Handling
-    # -----------------------------
-    def max_id(self, sender):
-        id = 0
-        for msg in self.process_msgs[sender][0]:
-            id = max(id, int(msg[0]))
-        return id
-
     def handle_message(self, data):
+        """Process incoming messages with proper ordering and flooding"""
         msg_id = data['id']
         msg_sender = data['sender']
         msg_timestamp = data['timestamp']
@@ -217,17 +223,26 @@ class Process:
 
         self.deliver_messages()
 
+    def deliver_messages(self):
+        """Deliver pending messages in proper timestamp order"""
+        self.pending_messages.sort(key=lambda msg: (msg['timestamp'], msg['sender']))
+        delivered_any = True
+        while delivered_any:
+            delivered_any = False
+            if self.pending_messages:
+                msg = self.pending_messages[0]
+                if msg['id'] not in self.delivered:
+                    self.print_chat(f"[{msg['sender']} | {msg['timestamp']}] {msg['message']}")
+                    self.delivered.add((msg['id'], msg['sender']))
+                    self.pending_messages.pop(0)
+                    delivered_any = True
+
     # -----------------------------
-    # Background Threads
+    # Utility Functions
     # -----------------------------
-    def listen_messages(self):
-        while True:
-            try:
-                data, _ = self.server.recvfrom(1024)
-                try:
-                    message = json.loads(data.decode())
-                    self.handle_message(message)
-                except Exception as e:
-                    print("Error processing message:", e)
-            except Exception as e:
-                print(f"Error receiving message: {e}")
+    def max_id(self, sender):
+        """Find the maximum message ID for a given sender"""
+        id = 0
+        for msg in self.process_msgs[sender][0]:
+            id = max(id, int(msg[0]))
+        return id

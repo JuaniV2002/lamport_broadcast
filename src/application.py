@@ -1,5 +1,5 @@
 import sys
-from process import Process
+from Process import Process
 
 def main(pid):
     current_process = Process(pid)

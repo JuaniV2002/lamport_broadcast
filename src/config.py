@@ -1,4 +1,4 @@
-BASE_PORT = 6000
+BASE_PORT = 5000
 PARTITION_SIZE = 2  # Number of processes in the system
 
 PROCESSES = {
