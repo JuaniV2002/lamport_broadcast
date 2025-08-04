@@ -224,7 +224,7 @@ class Process:
             
             self.flood_message(data)
 
-        if ((msg_id , msg_sender) in self.delivered):
+        if self.is_old_msg(data):
             return # The message has already been delivered
 
         # Only process messages from our direct neighbors for ordering
@@ -236,6 +236,12 @@ class Process:
             self.pending_messages.append(data)
 
         self.deliver_messages()
+
+    def is_old_msg(self, msg):
+        """Check if the message has already been delivered or is waiting to be delivered"""
+        is_delivered = (msg['id'], msg['sender']) in self.delivered
+        is_waiting = (msg['id'], msg['sender']) in self.process_msgs[msg_sender][0]
+        return is_delivered or is_waiting
 
     def deliver_messages(self):
         """Deliver pending messages in proper timestamp order"""
