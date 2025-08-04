@@ -240,7 +240,7 @@ class Process:
     def is_old_msg(self, msg):
         """Check if the message has already been delivered or is waiting to be delivered"""
         is_delivered = (msg['id'], msg['sender']) in self.delivered
-        is_waiting = (msg['id'], msg['sender']) in self.process_msgs[msg_sender][0]
+        is_waiting = (msg['id'], msg['sender']) in self.process_msgs[msg['sender']][0]
         return is_delivered or is_waiting
 
     def deliver_messages(self):
