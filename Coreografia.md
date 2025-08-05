@@ -20,9 +20,6 @@ FUNCIÓN broadcast(mensaje):
     // Crear un nuevo mensaje con metadatos
     nuevo_mensaje ← construir_mensaje(mensaje)
     
-    // Registrar el mensaje como visto
-    registrar_mensaje_visto(nuevo_mensaje)
-    
     // Procesar el mensaje localmente
     manejar_mensaje(nuevo_mensaje)
     
@@ -38,25 +35,18 @@ FUNCIÓN handle_message(data):
     // Extraer información relevante del mensaje
     extraer_identificadores(data)
     
-    // Verificar si el mensaje ya fue visto
-    SI mensaje_ya_visto(data):
-        RETORNAR
-    FIN SI
-    
-    // Registrar el mensaje como visto
-    registrar_mensaje_visto(data)
-    
     // Actualizar el reloj lógico
     actualizar_reloj()
+    
+    // Verificar si el mensaje es antiguo
+    // (está en la lista de entregados o en la lista de mensajes por nodo para ser entregado)
+    SI es_mensaje_antiguo(data):
+        RETORNAR
+    FIN SI
     
     // Propagar el mensaje si corresponde
     SI debe_propagarse(data):
         propagar_mensaje(data)
-    FIN SI
-    
-    // Verificar si el mensaje es antiguo
-    SI es_mensaje_antiguo(data):
-        RETORNAR
     FIN SI
     
     // Clasificar el mensaje según su origen

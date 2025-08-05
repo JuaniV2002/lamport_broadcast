@@ -25,7 +25,6 @@ class Process:
         # Message Ordering & Delivery
         self.pending_messages = []
         self.delivered = set()  # track delivered message ids
-        self.seen_messages = set()
         
         # Network Server Setup
         self._setup_udp_server()
@@ -188,10 +187,6 @@ class Process:
         }
         self.msg_id += 1
 
-        # Mark this message as seen to avoid processing it again
-        message_key = (message['sender'], message['id'])
-        self.seen_messages.add(message_key)
-
         # Process the message locally first
         self.handle_message(message)
         
@@ -206,15 +201,12 @@ class Process:
         msg = data['message']
         originator = data.get('originator', msg_sender)
 
-        message_key = (msg_sender, msg_id)
-        if message_key in self.seen_messages:
-            return  # Already processed this message
-        
-        self.seen_messages.add(message_key)
-
         with self.lock:
             self.lamport_clock = max(msg_timestamp, self.lamport_clock + 1)
 
+        if self.is_old_msg(data):
+            return # The message has already been delivered
+        
         # If this message didn't originate from us, flood it to other neighbors
         if originator != self.pid:
             # Find which neighbor sent us this message to avoid sending it back
@@ -223,9 +215,6 @@ class Process:
                     continue  # Skip ourselves
             
             self.flood_message(data)
-
-        if self.is_old_msg(data):
-            return # The message has already been delivered
 
         # Only process messages from our direct neighbors for ordering
         if msg_sender in self.process_msgs:
