@@ -2,7 +2,7 @@ import sys
 import socket
 import threading
 import json
-from config import PROCESSES, PARTITION_SIZE
+from config import PROCESSES
 
 class Process:
     def __init__(self, pid):
@@ -55,17 +55,11 @@ class Process:
 
     def _setup_neighbor_nodes(self):
         """Configure neighbor nodes based on partition topology"""
-        previous_mod = (int(self.pid[1:]) - 1) % PARTITION_SIZE
-        next_mod = (int(self.pid[1:]) + 1) % PARTITION_SIZE
-        
         # Find neighbor nodes in adjacent partitions
         self.nodes = {
             n: PROCESSES[n] 
             for n in PROCESSES 
-            if n != self.pid and (
-                int(n[1:]) % PARTITION_SIZE == previous_mod or 
-                int(n[1:]) % PARTITION_SIZE == next_mod
-            )
+            if n != self.pid and n in PROCESSES[self.pid]['neighbors']
         }
         
         # Initialize message tracking for each neighbor
@@ -83,19 +77,13 @@ class Process:
         """Sort messages from neighbors based on their IDs"""
         while True:
             for node_id, (msgs, last_id) in self.process_msgs.items():
-                msgs.sort(key=lambda x: int(x[0]))
+                msgs.sort(key=lambda x: int(x['id']))
             
                 for msg in msgs:
-                    if msg[0]-1 == last_id:
-                        self.pending_messages.append({
-                            'id': msg[0],
-                            'sender': node_id,
-                            'timestamp': self.lamport_clock,
-                            'message': msg[1],
-                            'originator': node_id  # Track the original sender
-                        })
+                    if msg['id']-1 == last_id:
+                        self.pending_messages.append(msg)
                         msgs.remove(msg)  # Remove delivered message
-                        self.process_msgs[node_id] = (msgs, msg[0])
+                        self.process_msgs[node_id] = (msgs, msg['id'])
                     else:
                         break
             self.deliver_messages()
@@ -183,7 +171,6 @@ class Process:
             'sender': self.pid,
             'timestamp': current_clock,
             'message': message_text,
-            'originator': self.pid  # Track the original sender for flooding
         }
         self.msg_id += 1
 
@@ -195,41 +182,34 @@ class Process:
 
     def handle_message(self, data):
         """Process incoming messages with proper ordering and flooding"""
-        msg_id = data['id']
         msg_sender = data['sender']
         msg_timestamp = data['timestamp']
-        msg = data['message']
-        originator = data.get('originator', msg_sender)
 
         with self.lock:
             self.lamport_clock = max(msg_timestamp, self.lamport_clock + 1)
 
+        # The message has already been delivered or is waiting to be delivered
         if self.is_old_msg(data):
-            return # The message has already been delivered
+            return
         
         # If this message didn't originate from us, flood it to other neighbors
-        if originator != self.pid:
-            # Find which neighbor sent us this message to avoid sending it back
-            for node_id, node_info in PROCESSES.items():
-                if node_info['host'] == self.host and node_info['port'] == self.port:
-                    continue  # Skip ourselves
-            
-            self.flood_message(data)
+        self.flood_message(data, exclude_node=msg_sender)
 
-        # Only process messages from our direct neighbors for ordering
+        # Add the message to the process_msgs list for this sender to process later
         if msg_sender in self.process_msgs:
-            # Add the message to the process_msgs list for this sender to process later
-            self.process_msgs[msg_sender][0].append((msg_id, msg))
+            self.process_msgs[msg_sender][0].append(data)
         else:
-            # For messages from non-direct neighbors (received via flooding), just add to pending
             self.pending_messages.append(data)
-
         self.deliver_messages()
 
     def is_old_msg(self, msg):
         """Check if the message has already been delivered or is waiting to be delivered"""
+        if msg['sender'] == self.pid:
+            return True
         is_delivered = (msg['id'], msg['sender']) in self.delivered
-        is_waiting = (msg['id'], msg['sender']) in self.process_msgs[msg['sender']][0]
+        if msg['sender'] not in self.process_msgs:
+            return is_delivered
+        is_waiting = msg in self.process_msgs[msg['sender']][0]
         return is_delivered or is_waiting
 
     def deliver_messages(self):
@@ -238,7 +218,7 @@ class Process:
         delivered_any = True
         while delivered_any:
             delivered_any = False
-            if self.pending_messages:
+            if self.pending_messages.__len__() > 0:
                 msg = self.pending_messages[0]
                 if msg['id'] not in self.delivered:
                     self.print_chat(f"[{msg['sender']} | {msg['timestamp']}] {msg['message']}")

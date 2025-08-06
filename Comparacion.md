@@ -1,6 +1,6 @@
 # Flooding versus Two phase commit comparation for atomic broadcast implementation
 
-## Two-Phase Commit style
+## Two-Phase Commit
 
 ### Mechanics
 - Message Types: request, reply, final
