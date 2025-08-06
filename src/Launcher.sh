@@ -4,9 +4,9 @@ PS4='+ $BASH_SOURCE:$LINENO: ' && set -x
 
 # Command list
 commands=(
-  "python3 application.py p1"
-  "python3 application.py p2"
-  "python3 application.py p3"
+  "python3 app.py p1"
+  "python3 app.py p2"
+  "python3 app.py p3"
 )
 
 OS=$(uname -s)

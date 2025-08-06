@@ -14,6 +14,6 @@ def main(pid):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Use: python application.py <process_id>")
+        print("Use: python app.py <process_id>")
         sys.exit(1)
     main(sys.argv[1])
