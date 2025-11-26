@@ -1,33 +1,48 @@
 # Distributed Message Broadcast with Lamport Clocks
 
-A distributed system implementation demonstrating message flooding and total ordering using Lamport logical clocks across multiple processes in a network topology.
+A simple distributed chat system using UDP message flooding and Lamport logical clocks for message ordering.
+
+## Overview
+
+This project demonstrates inter-process communication (IPC) in a distributed system where multiple processes communicate through a neighbor-based network topology. Messages are flooded across the network and delivered in a consistent order using Lamport timestamps.
 
 ## Features
 
-- **Lamport Logical Clocks** - Maintains causality and timestamps across distributed processes
-- **Message Flooding** - Messages propagate through neighbor connections to reach all processes  
-- **Total Message Ordering** - Messages delivered in consistent timestamp order across all processes
-- **Network Topology** - Configurable neighbor-based network structure
-- **Real-time Chat** - Interactive console interface for message broadcasting
+- **UDP-based communication** between processes
+- **Message flooding** through configurable neighbor topology
+- **Lamport clocks** for causal message ordering
+- **Duplicate detection** to prevent message re-delivery
 
 ## Requirements
 
 - Python 3.7+
-- Standard library only (socket, threading, json)
+- tmux (optional, for automated multi-process launch)
 
-## Project Structure
+## Usage
 
+### Manual Launch
+
+```bash
+cd src
+
+# Start each process in a separate terminal
+python3 app.py p1
+python3 app.py p2
+python3 app.py p3
 ```
-project2/src/
-├── config.py      # Network topology configuration
-├── Process.py     # Main process implementation  
-├── app.py         # Process launcher
-└── Launcher.sh    # Multi-terminal startup script
+
+### Automated Launch (tmux)
+
+```bash
+cd src
+./Launcher.sh
 ```
+
+Type a message in any process terminal to broadcast it to all other processes.
 
 ## Configuration
 
-Edit `config.py` to define network topology:
+Edit `src/config.py` to modify the network topology:
 
 ```python
 PROCESSES = {
@@ -37,31 +52,19 @@ PROCESSES = {
 }
 ```
 
-## Quick Start
+## Project Structure
 
-**Option 1: Manual startup**
-```bash
-# Terminal 1
-python3 app.py p1
-
-# Terminal 2  
-python3 app.py p2
-
-# Terminal 3
-python3 app.py p3
 ```
-
-**Option 2: Automated startup**
-```bash
-./Launcher.sh  # Uses tmux to launch all processes
+src/
+├── app.py         # Entry point
+├── Process.py     # Core process logic (networking, flooding, ordering)
+├── config.py      # Network topology definition
+└── Launcher.sh    # tmux launcher script
 ```
 
 ## How It Works
 
-1. **Message Creation** - Process creates message with Lamport timestamp
-2. **Local Delivery** - Message processed locally first
-3. **Flooding** - Message sent to all neighbor processes
-4. **Propagation** - Neighbors forward message to their neighbors (excluding sender)
-5. **Ordering** - All processes deliver messages in timestamp order
-
-Messages are delivered consistently across all processes based on Lamport clock ordering, ensuring causal consistency in the distributed system.
+1. Each process listens on a UDP port and connects to its defined neighbors
+2. When a user sends a message, it's assigned a Lamport timestamp and flooded to neighbors
+3. Each receiving process updates its clock, forwards the message to other neighbors, and queues it for delivery
+4. Messages are delivered in timestamp order (ties broken by sender ID)
